@@ -47,3 +47,10 @@ else:
         print(f"4 - 5 = {proxy.fn_sub(4, 5)}")
         print(f"4 * 5 = {proxy.fn_mul(4, 5)}")
         print(f"4 / 5 = {proxy.fn_div(4, 5)}")
+
+ #   python
+#import xmlrpc.client
+#with xmlrpc.client.ServerProxy('http://localhost:50000') as proxy:
+#print(proxy.fn_add(4,5))
+
+#não esquecer de rodar o servidor antes de rodar o cliente, utilizando python nomedoarquivo.py
