@@ -1,58 +1,64 @@
 import argparse
-import base64
-import grpc
+import json
 import stomp
-import stomp.utils
-import CalcIMC_pb2
-import CalcIMC_pb2_grpc
+import stomp.listener
 import time
+import numpy as np
+from numpy import percentile
+from numpy.random import rand
 
-class AdapterListener(stomp.ConnectionListener):
-    def __init__(self, cnn, channel):
-        self.cnn = cnn
-        self.client = CalcIMC_pb2_grpc.IMCStub(channel)
+class TukeyRequestListener(stomp.ConnectionListener):
+    def __init__(self, conn):
+        self.conn = conn
 
-    # Quando /queue/imc recebe uma mensagem, o broker aciona este método
     def on_message(self, frame):
-        request = CalcIMC_pb2.CalculoIMCRequest()
-        # Desserializa o objeto
-        request.ParseFromString(base64.b64decode(frame.body))
-        # Faz a chamada RPC
-        response = self.client.CalculoIMC(request)
-        # Serializa a resposta
-        response_str = response.SerializeToString()
-        # Posta a resposta
-        self.cnn.send(destination="/queue/tmp", body=base64.b64encode(response_str), content_type="application/octet-stream")
+        data = np.asarray(json.loads(frame.body))
+        quartiles = percentile(data, [25, 50, 75])
+        tid = self.conn.begin()
+        self.conn.send(destination='/queue/median', body=str(quartiles[1]))
+        self.conn.send(destination='/queue/first-q', body=str(quartiles[0]))
+        self.conn.send(destination='/queue/third-q', body=str(quartiles[2]))
+        self.conn.send(destination='/queue/min', body=str(data.min()))
+        self.conn.send(destination='/queue/max', body=str(data.max()))
+        self.conn.commit(tid)
 
-class TestListener(stomp.ConnectionListener):
+class TukeyResponseListener(stomp.ConnectionListener):
+    def __init__(self, conn):
+        self.conn = conn
+
     def on_message(self, frame):
-        response = CalcIMC_pb2.CalculoIMCResponse()
-        response.ParseFromString(base64.b64decode(frame.body))
-        print(f"Recebido: {response.aviso} (IMC: {response.imc:.2f})")
+        print(f"{frame.headers['destination']}: {frame.body}")
 
 def adapter(connection):
-    channel = grpc.insecure_channel('127.0.0.1:50051')
-    # Conexão com o gRPC
-    connection.set_listener('adapter', AdapterListener(connection, channel))
+    connection.set_listener('adapter', TukeyRequestListener(connection))
     connection.connect(wait=True)
-    connection.subscribe(destination='/queue/imc', id=int(time.time()))
+    connection.subscribe(destination='/queue/tukey', id=int(time.time()))
 
 def tester(connection):
-    connection.set_listener('tester', TestListener())
+    connection.set_listener('tester', TukeyResponseListener(connection))
     connection.connect(wait=True)
-    connection.subscribe(destination='/queue/tmp', id=int(time.time()))  # Queue de respostas
-    request = CalcIMC_pb2.CalculoIMCRequest(nome='Marta', peso=65.32, altura=1.65)
-    connection.send(destination="/queue/imc", body=base64.b64encode(request.SerializeToString()), content_type='application/octet-stream')
+    connection.subscribe(destination='/queue/median', id=int(time.time()))
+    connection.subscribe(destination='/queue/first-q', id=int(time.time()))
+    connection.subscribe(destination='/queue/third-q', id=int(time.time()))
+    connection.subscribe(destination='/queue/min', id=int(time.time()))
+    connection.subscribe(destination='/queue/max', id=int(time.time()))
+    data = rand(25)
+    print(f"Data: {data}")
+    connection.send(destination='/queue/tukey', body=json.dumps(data.tolist()))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", action='store_true')
     args = parser.parse_args()
 
-    cnn = stomp.Connection()  # Conexão com MQ (localhost:61613)
+    conn = stomp.Connection()  # Conexão com MQ (localhost:61613)
     if args.server:
-        adapter(cnn)
+        adapter(conn)
     else:
-        tester(cnn)
-        time.sleep(2)
-    cnn.disconect()
+        tester(conn)
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        conn.disconnect()

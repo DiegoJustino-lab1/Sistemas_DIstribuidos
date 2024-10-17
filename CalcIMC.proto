@@ -10,3 +10,7 @@ message CalculoIMCResponse {
     string aviso = 1;
     double imc = 2;
 }
+
+service IMCService {
+    rpc CalculoIMC (CalculoIMCRequest) returns (CalculoIMCResponse);
+}
